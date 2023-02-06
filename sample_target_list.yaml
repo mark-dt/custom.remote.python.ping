@@ -1,0 +1,3 @@
+target_list:
+  - target: www.google.com
+    frequency: 5
