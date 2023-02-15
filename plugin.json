@@ -1,6 +1,6 @@
 {
   "name": "custom.remote.python.ping",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "python",
   "entity": "CUSTOM_DEVICE",
   "technologies": [
@@ -34,16 +34,9 @@
       ]
     },
     {
-      "key": "proxy_address",
-      "type": "String"
-    },
-    {
-      "key": "proxy_username",
-      "type": "String"
-    },
-    {
-      "key": "proxy_password",
-      "type": "Password"
+      "key": "frequency",
+      "type": "Integer",
+      "defaultValue": 1
     },
     {
       "key": "failure_count",
@@ -53,7 +46,7 @@
     {
       "key": "target_list",
       "type": "Textarea",
-      "defaultValue": "target_list:\n  - target: www.google.com\n    frequency: 5\n"
+      "defaultValue": "www.dynatrace.com,www.google.com"
     }
   ],
   "configUI": {
@@ -68,40 +61,31 @@
       {
         "key": "api_token",
         "displayName": "API Token",
-        "displayHint": "Requires \"Create and read synthetic monitors, locations, and nodes\" permission",
+        "displayHint": "Requires entites.read, entites.write, DataExport",
         "displayOrder": 2
       },
       {
         "key": "target_list",
         "displayName": "List of Targets",
-        "displayHint": "Optional, just leave empty",
+        "displayHint": "www.dynatrace.com,www.google.com",
         "displayOrder": 3
       },
       {
-        "key": "proxy_address",
-        "displayName": "(Optional) Proxy Address",
-        "displayOrder": 8
-      },
-      {
-        "key": "proxy_username",
-        "displayName": "(Optional) Proxy Username",
-        "displayOrder": 9
-      },
-      {
-        "key": "proxy_password",
-        "displayName": "(Optional) Proxy Password",
-        "displayOrder": 10
-      },
-      {
-        "key": "log_level",
-        "displayName": "Log level",
-        "displayOrder": 11
+        "key": "frequency",
+        "displayName": "Frequency",
+        "displayOrder": 4,
+        "displayHint": "How often to cehck for ping (in minutes)"
       },
       {
         "key": "failure_count",
         "displayName": "Failure count",
-        "displayOrder": 12,
+        "displayOrder": 5,
         "displayHint": "Number of consecutive failures before reporting error"
+      },
+      {
+        "key": "log_level",
+        "displayName": "Log level",
+        "displayOrder": 21
       }
     ]
   },

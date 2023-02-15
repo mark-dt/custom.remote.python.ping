@@ -26,48 +26,28 @@ class PingExtension(RemoteBasePlugin):
             "Authorization": "Api-TOKEN " + self.token,
             "Content-Type": "application/json",
         }
-        self.proxies = self.build_proxy_url()
-        self.executions = 0
-        self.failures_detected = 0
+
         self.tools = Tools(log, log_level, self.root_url, self.token)
         if not self.config.get("target_list"):
             raise ConfigException(f"Cannot leave target_list field empty.")
         else:
             self.target_list = self.parse_targets(self.config.get("target_list"))
-            if len(self.target_list["target_list"]) < 1:
+            if len(self.target_list) < 1:
                 raise ConfigException(f"target_list cannot be empty.")
+
+        self.frequency = self.config.get("frequency", 1)
+        self.failure_count = self.config.get("failure_count", 1)
+        # TODO: remove ?
         self.hostname = socket.gethostname()
         log.debug(f"Hostname: {self.hostname}")
 
-
-
-    def build_proxy_url(self):
-        proxy_address = self.config.get("proxy_address")
-        proxy_username = self.config.get("proxy_username")
-        proxy_password = self.config.get("proxy_password")
-
-        if proxy_address:
-            protocol, address = proxy_address.split("://")
-            proxy_url = f"{protocol}://"
-            if proxy_username:
-                proxy_url += proxy_username
-            if proxy_password:
-                proxy_url += f":{proxy_password}"
-            proxy_url += f"@{address}"
-            return {"https": proxy_url}
-
-        return {}
-
     def parse_targets(self, text):
-        try:
-            dct = yaml.safe_load(text)
-        except Exception as e:
-            error = f"Could not parse cmd config: {e}"
-            log.error(error)
-            exit(-1)
+        hostname_list = text.split(",")
+        host_list = []
+        for host in hostname_list:
+            host_list.append({"hostname": host.strip(), "failure_count": 0})
 
-        # self.logger.debug(dct)
-        return dct
+        return host_list
 
     def get_custom_device(self, hostname):
         """returns json list with all CD"""
@@ -79,9 +59,9 @@ class PingExtension(RemoteBasePlugin):
 
     def send_error_event(self, device, ping_result):
         rt = ping_result.rtt_avg
-        url = self.root_url + '/api/v2/events/ingest'
-        name = device['displayName']
-        #device_id = device['entityId']
+        url = self.root_url + "/api/v2/events/ingest"
+        name = device["displayName"]
+        # device_id = device['entityId']
         payload = {
             "eventType": "ERROR_EVENT",
             "title": f"Ping failed for {name}",
@@ -91,9 +71,11 @@ class PingExtension(RemoteBasePlugin):
                 "response_time": str(rt),
                 "packet_loss_rate": str(ping_result.packet_loss_rate),
                 "paclet_loss_count": str(ping_result.packet_loss_count),
-            }
+            },
         }
-        res = requests.post(url, data=json.dumps(payload), timeout=10, headers=self.header, verify=False)
+        res = requests.post(
+            url, data=json.dumps(payload), timeout=10, headers=self.header, verify=False
+        )
         if res.status_code > 399:
             log.error(f"Could not send Evetn to hostname")
             log.error(res.text)
@@ -103,73 +85,67 @@ class PingExtension(RemoteBasePlugin):
     def query(self, **kwargs) -> None:
 
         # init metric
-        self.device_names = [t["target"] for t in self.target_list["target_list"]]
-        log.debug(self.device_names)
-        device_list = []
-        for d in self.device_names:
-            tmp = self.get_custom_device(d)
+        device_dict = {}
+        for d in self.target_list:
+            # Instead of getting one by one try with type("CUSTOM_DEVICE"),entityName.in("TEST1", "TEST2")
+            tmp = self.get_custom_device(d["hostname"])
             if len(tmp) < 1:
-                #raise ConfigException(f"Could not find device for {d}")
+                # raise ConfigException(f"Could not find device for {d}")
                 log.error(f"Could not find device for {d}")
                 continue
             # device_list.extend(tmp) ???
-            for t in tmp:
-                device_list.append(t)
-        log.debug(device_list)
+            device_dict[d["hostname"]] = tmp[0]
+        log.debug(device_dict)
+
+
         log.setLevel(self.config.get("log_level"))
 
         # this should only happen once at the init of extension
-        if self.tools.update_heartbeat_metric(device_list):
+        if self.tools.update_heartbeat_metric(device_dict):
             log.debug("Just updating ping")
             return
-        # target = self.config.get("test_target")
-        # target_list = self.config.get("test_target").split(",")
-
-        failure_count = self.config.get("failure_count", 1)
-        # TODO: location should be hostname
-
-        # frequency = int(self.config.get("frequency")) if self.config.get("frequency") else 15
 
         today = datetime.today()
         minutes = today.minute
 
+        if minutes % self.frequency != 0:
+            log.debug("Nothing to do...")
+            return
+
         # for target in target_list:
-        for target in self.target_list["target_list"]:
-            frequency = int(target["frequency"])
-            target_name = target["target"]
+        for target in self.target_list:
+            #frequency = int(target["frequency"])
+            target_name = target["hostname"]
             log.debug(f"Starging test for {target}")
 
-            # TODO: better handling of frequncy
-            if minutes % frequency == 0:
-                #device_list = self.get_custom_device(target)
-                # should always be just one 1
-                for device in device_list:
-                    if device["displayName"] != target_name:
-                        continue
-                    ping_result = ping(target_name)
-                    log.debug(ping_result.as_dict())
 
-                    success = (
-                        ping_result.packet_loss_rate is not None
-                        and ping_result.packet_loss_rate == 0
+            ping_result = ping(target_name)
+            log.debug(ping_result.as_dict())
+
+            success = (
+                ping_result.packet_loss_rate is not None
+                and ping_result.packet_loss_rate == 0
+            )
+
+            # TODO: Report RT, as metric to device
+            response_time = ping_result.rtt_avg or 0
+            # TODO: rename
+            self.main(device_dict[target_name], response_time)
+
+            if not success:
+                # refactor failures count
+                # each target should get a failure count !!
+                # self.failures_detected += 1
+                # if self.failures_detected < failure_count:
+                target["failure_count"] += 1
+                if target["failure_count"] >= self.failure_count:
+                    failures = target["failure_count"]
+                    log.error(
+                        f"The result was: {success}. Attempt {failures}/{self.failure_count}, not reporting yet"
                     )
-
-                    # TODO: Report RT, as metric to device
-                    response_time = ping_result.rtt_avg or 0
-                    # TODO: rename
-                    self.main(device, response_time)
-
-                    if not success:
-                        # refactor failures count
-                        # each target should get a failure count !!
-                        #self.failures_detected += 1
-                        #if self.failures_detected < failure_count:
-                        log.error(
-                            f"The result was: {success}. Attempt {self.failures_detected}/{failure_count}, not reporting yet"
-                        )
-                        log.debug(device)
-                        self.send_error_event(device, ping_result)
-                        success = True
+                    #self.send_error_event(device, ping_result)
+                    target["failure_count"] = 0
+                success = True
 
     def get_device_template(self):
         data = {
@@ -212,6 +188,7 @@ class PingExtension(RemoteBasePlugin):
         # old_d["series"][0]["dimensions"]['CUSTOM_DEVICE'] = new_d['entityId']
         # print(json.dumps(old_d))
         self.update_device(old_d, new_d["properties"]["detectedName"])
+
 
 def ping(host: str) -> pingparsing.PingStats:
     ping_parser = pingparsing.PingParsing()

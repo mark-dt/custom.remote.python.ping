@@ -85,7 +85,8 @@ class Tools:
     def update_heartbeat_metric(self, device_list):
         # get types from all custom devices
         device_types = []
-        for device in device_list:
+        for dev in device_list:
+            device = device_list[dev]
             if "customProperties" in device["properties"]:
                 for property in device["properties"]["customProperties"]:
                     if property["key"] == "Type" or property["key"] == "type":
@@ -120,7 +121,9 @@ class Tools:
         self.logger.info(data)
         # update metric
         url = self.root_url + "/api/v1/timeseries/custom%3Aping"
-        res = requests.put(url=url, data=json.dumps(data), timeout=10, verify=False, headers=self.header)
+        res = requests.put(
+            url=url, data=json.dumps(data), timeout=10, verify=False, headers=self.header
+        )
         if res.status_code > 399:
             self.logger.error(f"Failed to update metric {res.text}")
             return False
@@ -155,11 +158,13 @@ class Tools:
             "warnings": [],
         }
         url = self.root_url + "/api/v1/timeseries/custom%3Aping"
-        #res = self.tools.make_request(URL=url, method="PUT", payload=json.dumps(payload))
-        res = requests.put(url=url, data=json.dumps(payload), timeout=10, verify=False, headers=self.header)
+        # res = self.tools.make_request(URL=url, method="PUT", payload=json.dumps(payload))
+        res = requests.put(
+            url=url, data=json.dumps(payload), timeout=10, verify=False, headers=self.header
+        )
         if res.status_code > 399:
             self.logger.error(f"Failed to update metric {res.text}")
-            return None 
+            return None
         self.logger.debug(res.text)
         return None
 
