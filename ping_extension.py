@@ -1,18 +1,19 @@
 from datetime import datetime
 import time
 import logging
-import yaml
-import socket
 import requests
 import json
+import subprocess
+import re
+
 from tools_ping import Tools
+import ping_success_metric
 
 from ruxit.api.exceptions import ConfigException
 from ruxit.api.base_plugin import RemoteBasePlugin
 
-import pingparsing
-
 log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
 
 class PingExtension(RemoteBasePlugin):
@@ -22,6 +23,8 @@ class PingExtension(RemoteBasePlugin):
         self.root_url = tmp_url[:-1] if tmp_url[-1] == "/" else tmp_url
         self.token = self.config.get("api_token")
         log_level = self.config.get("log_level")
+        log.info(f"Log level {log_level}")
+        #log.setLevel(self.config.get("log_level"))
         self.header = {
             "Authorization": "Api-TOKEN " + self.token,
             "Content-Type": "application/json",
@@ -37,9 +40,27 @@ class PingExtension(RemoteBasePlugin):
 
         self.frequency = self.config.get("frequency", 1)
         self.failure_count = self.config.get("failure_count", 1)
-        # TODO: remove ?
-        self.hostname = socket.gethostname()
-        log.debug(f"Hostname: {self.hostname}")
+
+        self.device_properties = self.config["device_porperties"]
+
+        self.device_dict = {}
+        for d in self.target_list:
+            # Instead of getting one by one try with type("CUSTOM_DEVICE"),entityName.in("TEST1", "TEST2")
+            hostname = d["hostname"]
+            tmp = self.get_custom_device(hostname)
+            if len(tmp) < 1:
+                # raise ConfigException(f"Could not find device for {d}")
+                log.error(f"Could not find device for {hostname}")
+                raise ConfigException(f"Could not find device for {hostname}")
+            # device_list.extend(tmp) ???
+            self.device_dict[hostname] = tmp[0]
+        # log.debug(device_dict)
+
+
+        if self.tools.update_heartbeat_metric(self.device_dict):
+            log.debug("Just updating ping")
+            return
+        ping_success_metric.update_ping_success_metric(self.tools, self.device_dict, log)
 
     def parse_targets(self, text):
         hostname_list = text.split(",")
@@ -57,20 +78,20 @@ class PingExtension(RemoteBasePlugin):
         cd_list = self.tools.get_entities(entity_selector=_selctor, fields=_fields)
         return cd_list
 
-    def send_error_event(self, device, ping_result):
-        rt = ping_result.rtt_avg
+    def send_error_event(self, hostname, ping_result):
+        # rt = ping_result.rtt_avg
+        rt = ping_result
         url = self.root_url + "/api/v2/events/ingest"
-        name = device["displayName"]
         # device_id = device['entityId']
         payload = {
             "eventType": "ERROR_EVENT",
-            "title": f"Ping failed for {name}",
-            "entitySelector": f"type(CUSTOM_DEVICE),entityName({name})",
+            "title": f"Ping failed for {hostname}",
+            "entitySelector": f"type(CUSTOM_DEVICE),entityName({hostname})",
             "properties": {
-                "dt.event.description": f"Ping failed for {name}",
+                "dt.event.description": f"Ping failed for {hostname}",
                 "response_time": str(rt),
-                "packet_loss_rate": str(ping_result.packet_loss_rate),
-                "paclet_loss_count": str(ping_result.packet_loss_count),
+                # "packet_loss_rate": str(ping_result.packet_loss_rate),
+                # "paclet_loss_count": str(ping_result.packet_loss_count),
             },
         }
         res = requests.post(
@@ -84,27 +105,19 @@ class PingExtension(RemoteBasePlugin):
 
     def query(self, **kwargs) -> None:
 
-        # init metric
-        device_dict = {}
-        for d in self.target_list:
-            # Instead of getting one by one try with type("CUSTOM_DEVICE"),entityName.in("TEST1", "TEST2")
-            tmp = self.get_custom_device(d["hostname"])
-            if len(tmp) < 1:
-                # raise ConfigException(f"Could not find device for {d}")
-                log.error(f"Could not find device for {d}")
-                continue
-            # device_list.extend(tmp) ???
-            device_dict[d["hostname"]] = tmp[0]
-        log.debug(device_dict)
+        self.tools.logger.setLevel(self.config.get("log_level"))
+        group = self.topology_builder.create_group(
+            identifier="IMO_Extensions",
+            group_name="IMO_Extensions"
+            # identifier="My_Extensions", group_name="My_Extensions"
+        )
+        device_name = self.activation.endpoint_name
+        # properties = self.tools.parse_commands(self.device_properties)
+        # logger.debug(f'Hostname {host_name}')
+        device = group.create_device(identifier=device_name, display_name=device_name)
+        self.tools.add_device_properties(device, self.device_properties)
 
-
-        log.setLevel(self.config.get("log_level"))
-
-        # this should only happen once at the init of extension
-        if self.tools.update_heartbeat_metric(device_dict):
-            log.debug("Just updating ping")
-            return
-
+        device.absolute(key="devices_pinged", value=len(self.target_list))
         today = datetime.today()
         minutes = today.minute
 
@@ -114,43 +127,31 @@ class PingExtension(RemoteBasePlugin):
 
         # for target in target_list:
         for target in self.target_list:
-            #frequency = int(target["frequency"])
+            # frequency = int(target["frequency"])
             target_name = target["hostname"]
-            log.debug(f"Starging test for {target}")
+            log.debug(f"Starting test for {target}")
 
-
-            ping_result = ping(target_name)
-            log.debug(ping_result.as_dict())
-
-            success = (
-                ping_result.packet_loss_rate is not None
-                and ping_result.packet_loss_rate == 0
-            )
-
-            # TODO: Report RT, as metric to device
-            response_time = ping_result.rtt_avg or 0
-            # TODO: rename
-            self.main(device_dict[target_name], response_time)
+            success, response_time = self.subproc_ping(target_name)
+            self.post_device_metric(self.device_dict[target_name], response_time, 1 if success else 0)
 
             if not success:
-                # refactor failures count
-                # each target should get a failure count !!
-                # self.failures_detected += 1
-                # if self.failures_detected < failure_count:
                 target["failure_count"] += 1
                 if target["failure_count"] >= self.failure_count:
                     failures = target["failure_count"]
-                    log.error(
-                        f"The result was: {success}. Attempt {failures}/{self.failure_count}, not reporting yet"
-                    )
-                    #self.send_error_event(device, ping_result)
+                    log.error(f"The result was: {success}. Attempt {failures}/{self.failure_count}")
+                    # self.send_error_event(target_name, ping_result)
+                    self.send_error_event(target_name, response_time)
                     target["failure_count"] = 0
                 success = True
+        # TODO: maybe have 2 metrics, one the total amount of devices and another with succesfull/failed pings
 
     def get_device_template(self):
         data = {
             "properties": {},
-            "series": [{"timeseriesId": "custom:ping", "dimensions": {}, "dataPoints": []}],
+            "series": [
+                {"timeseriesId": "custom:ping", "dimensions": {}, "dataPoints": []},
+                {"timeseriesId": "custom:ping_success", "dimensions": {}, "dataPoints": []},
+            ],
         }
         return data
 
@@ -164,7 +165,7 @@ class PingExtension(RemoteBasePlugin):
             return
         log.debug("Ping sent to {}".format(device_id))
 
-    def main(self, device, ping_rt):
+    def post_device_metric(self, device, ping_rt, ping_success):
         new_d = device
         old_d = self.get_device_template()
         # get group
@@ -185,15 +186,24 @@ class PingExtension(RemoteBasePlugin):
         now = int(time.time()) * 1000
         data_point = [now, ping_rt]
         old_d["series"][0]["dataPoints"].append(data_point)
+        data_point = [now, ping_success]
+        old_d["series"][1]["dataPoints"].append(data_point)
         # old_d["series"][0]["dimensions"]['CUSTOM_DEVICE'] = new_d['entityId']
         # print(json.dumps(old_d))
         self.update_device(old_d, new_d["properties"]["detectedName"])
 
+    def subproc_ping(self, host: str):
+        try:
+            out = subprocess.check_output(["ping", host, "-c", "1", "-W", "2"])
+        except subprocess.CalledProcessError as e:
+            log.error(f"Failed ping for {host}: {e}")
+            return False, -1
+        # log.debug(str(out))
+        try:
+            res = re.search("time=(.+?) ", str(out))
+            avg_time = float(res.group(1))
+        except Exception as e:
+            log.error(f"Could not parse avg_time {e}")
+            return False, -1
 
-def ping(host: str) -> pingparsing.PingStats:
-    ping_parser = pingparsing.PingParsing()
-    transmitter = pingparsing.PingTransmitter()
-    transmitter.destination = host
-    transmitter.count = 2
-    transmitter.timeout = 2000
-    return ping_parser.parse(transmitter.ping())
+        return True, avg_time

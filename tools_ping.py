@@ -1,14 +1,12 @@
 import logging
 import requests
 import json
+import yaml
 
 
 class Tools:
     def __init__(self, logger, log_level, root_url, token) -> None:
         self.logger = logger
-        self.logger.debug(f"Initialize Tools..")
-        self.logger.debug(f"{root_url}")
-        self.logger.debug(f"{token}")
         if log_level == "DEBUG":
             log_level = logging.DEBUG
         elif log_level == "INFO":
@@ -28,7 +26,7 @@ class Tools:
             "Authorization": "Api-TOKEN " + self.token,
             "Content-Type": "application/json",
         }
-        logger.info("Tools Init done")
+        logger.info("Ping Tools Init done")
 
     def make_request(self, url=None, parameters=None, method=None, payload=None):
         """
@@ -131,7 +129,6 @@ class Tools:
 
     def get_heartbeat(self):
         url = self.root_url + "/api/v1/timeseries?source=CUSTOM"
-        res = self.make_request(url=url, method="GET")
         res = requests.get(url=url, timeout=10, verify=False, headers=self.header)
         if res.status_code > 399:
             self.logger.error(f"Failed to get metric: {res.text}")
@@ -195,3 +192,26 @@ class Tools:
             host_list.extend(res_json["entities"])
 
         return host_list
+
+    def parse_properties(self, text):
+        try:
+            dct = yaml.safe_load(text)
+        except Exception as e:
+            error = f"Could not parse cmd config: {e}"
+            self.logger.error(error)
+            return {}
+
+        # self.logger.debug(dct)
+        return dct
+
+    def add_device_properties(self, device, device_properties):
+        properties = self.parse_properties(device_properties)
+        if not properties:
+            self.logger.debug("No Properties to add")
+            return
+        # self.logger.debug(f"adding properties {properties}")
+        # {'properties': [{'key1': 'value'}]}
+        for p in properties["properties"]:
+            key = list(p.keys())[0]
+            val = p[list(p.keys())[0]]
+            device.report_property(key, val)

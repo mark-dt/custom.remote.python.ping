@@ -1,17 +1,17 @@
 {
   "name": "custom.remote.python.ping",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "type": "python",
   "entity": "CUSTOM_DEVICE",
   "technologies": [
     "ICMP"
   ],
-  "metricGroup": "tech.ping",
+  "favicon": "infrastructurehealth",
+  "metricGroup": "tech.remote.python.ping",
   "source": {
     "package": "ping_extension",
     "className": "PingExtension",
     "install_requires": [
-      "pingparsing",
       "pyyaml"
     ],
     "activation": "Remote"
@@ -47,6 +47,11 @@
       "key": "target_list",
       "type": "Textarea",
       "defaultValue": "www.dynatrace.com,www.google.com"
+    },
+    {
+      "key": "device_porperties",
+      "type": "Textarea",
+      "defaultValue": "properties:\n  - key0: val0"
     }
   ],
   "configUI": {
@@ -74,13 +79,19 @@
         "key": "frequency",
         "displayName": "Frequency",
         "displayOrder": 4,
-        "displayHint": "How often to cehck for ping (in minutes)"
+        "displayHint": "How often to check for ping (in minutes)"
       },
       {
         "key": "failure_count",
         "displayName": "Failure count",
         "displayOrder": 5,
         "displayHint": "Number of consecutive failures before reporting error"
+      },
+      {
+        "key": "device_porperties",
+        "displayName": "Device Properties",
+        "displayHint": "Optional, just leave empty",
+        "displayOrder": 6
       },
       {
         "key": "log_level",
@@ -93,10 +104,35 @@
     {
       "entity": "CUSTOM_DEVICE",
       "timeseries": {
-        "key": "ping_extension_tests",
+        "key": "devices_pinged",
         "unit": "Count",
-        "displayname": "Ping Extension - Checks"
+        "displayname": "Devices Pinged",
+        "dimensions": []
       }
     }
-  ]
+  ],
+  "ui": {
+    "keymetrics": [
+      {
+        "key": "devices_pinged",
+        "aggregation": "avg",
+        "mergeaggregation": "avg",
+        "displayname": "Devices pinged"
+      }
+    ],
+    "keycharts": [
+      {
+        "title": "Devices Pinged",
+        "description": " ",
+        "group": "IMO Extensions",
+        "series": [
+          {
+            "key": "devices_pinged",
+            "displayname": "Devices Pinged",
+            "aggregation": "avg"
+          }
+        ]
+      }
+    ]
+  }
 }
